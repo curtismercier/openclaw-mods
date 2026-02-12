@@ -1,0 +1,132 @@
+name: Weekly Summary
+
+on:
+  schedule:
+    - cron: '0 12 * * 0'  # Sundays at noon UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  weekly-summary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Generate weekly summary
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SINCE=$(date -u -d '7 days ago' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -v-7d '+%Y-%m-%dT%H:%M:%SZ')
+          WEEK_START=$(date -u -d '7 days ago' '+%Y-%m-%d' 2>/dev/null || date -u -v-7d '+%Y-%m-%d')
+          WEEK_END=$(date -u '+%Y-%m-%d')
+          
+          {
+            echo "## 📊 Weekly Summary: $WEEK_START → $WEEK_END"
+            echo ""
+            
+            # --- Commit stats ---
+            gh api "repos/openclaw/openclaw/commits?since=$SINCE&sha=main&per_page=100" \
+              --jq '.[].commit.message | split("\n")[0]' > /tmp/week_msgs.txt 2>/dev/null || true
+            
+            TOTAL_COMMITS=$(wc -l < /tmp/week_msgs.txt | tr -d ' ')
+            FEAT_COUNT=$(grep -c "^feat" /tmp/week_msgs.txt 2>/dev/null || echo "0")
+            FIX_COUNT=$(grep -c "^fix" /tmp/week_msgs.txt 2>/dev/null || echo "0")
+            CHORE_COUNT=$(grep -c "^chore\|^docs\|^ci\|^refactor" /tmp/week_msgs.txt 2>/dev/null || echo "0")
+            
+            echo "### Upstream Activity"
+            echo ""
+            echo "| Metric | Count |"
+            echo "|--------|-------|"
+            echo "| Total commits | **$TOTAL_COMMITS** |"
+            echo "| Features | $FEAT_COUNT |"
+            echo "| Fixes | $FIX_COUNT |"
+            echo "| Chores/docs/refactors | $CHORE_COUNT |"
+            echo ""
+            
+            # --- Releases ---
+            RELEASES=$(gh api repos/openclaw/openclaw/releases \
+              --jq "[.[] | select(.published_at > \"$SINCE\")] | length" 2>/dev/null || echo "0")
+            
+            if [ "$RELEASES" -gt 0 ]; then
+              echo "### 🚀 Releases This Week"
+              echo ""
+              gh api repos/openclaw/openclaw/releases \
+                --jq ".[] | select(.published_at > \"$SINCE\") | \"- **\(.tag_name)** — \(.name) (\(.published_at[0:10]))\"" 2>/dev/null || true
+              echo ""
+            fi
+            
+            # --- Key areas of change ---
+            echo "### 🔍 Areas of Change"
+            echo ""
+            # Get all changed files this week (sample from first 30 commits)
+            gh api "repos/openclaw/openclaw/commits?since=$SINCE&sha=main&per_page=30" \
+              --jq '.[].sha' > /tmp/week_shas.txt 2>/dev/null || true
+            
+            > /tmp/week_files.txt
+            head -30 /tmp/week_shas.txt | while IFS= read -r sha; do
+              [ -z "$sha" ] && continue
+              gh api "repos/openclaw/openclaw/commits/$sha" \
+                --jq '.files[].filename' >> /tmp/week_files.txt 2>/dev/null || true
+            done
+            
+            if [ -s /tmp/week_files.txt ]; then
+              sort /tmp/week_files.txt | cut -d'/' -f1-2 | sort | uniq -c | sort -rn | head -10 | while read count dir; do
+                echo "- **$dir** ($count changes)"
+              done
+            fi
+            echo ""
+            
+            # --- Our PRs status ---
+            echo "### 🔀 Our PR Status"
+            echo ""
+            
+            # Open
+            gh api 'repos/openclaw/openclaw/pulls?state=open&per_page=100' \
+              --jq '.[] | select(.user.login == "curtismercier") | "- 🟢 **#\(.number)** \(.title) — opened \(.created_at[0:10]), last updated \(.updated_at[0:10])"' 2>/dev/null || true
+            
+            # Merged this week
+            gh api 'repos/openclaw/openclaw/pulls?state=closed&sort=updated&direction=desc&per_page=20' \
+              --jq ".[] | select(.user.login == \"curtismercier\" and .merged_at > \"$SINCE\") | \"- 🟣 **#\(.number)** \(.title) — **merged** \(.merged_at[0:10]) 🎉\"" 2>/dev/null || true
+            
+            echo ""
+            echo "---"
+          } > /tmp/weekly.md
+
+      - name: Post weekly issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TITLE="📊 Weekly Summary — $(date -u '+%Y-%m-%d')"
+          gh issue create \
+            --repo ${{ github.repository }} \
+            --title "$TITLE" \
+            --body-file /tmp/weekly.md \
+            --label "weekly-summary"
+
+      - name: Prepend to UPSTREAM.md
+        run: |
+          if [ -f UPSTREAM.md ]; then
+            {
+              head -6 UPSTREAM.md
+              echo ""
+              cat /tmp/weekly.md
+              echo ""
+              tail -n +7 UPSTREAM.md
+            } > /tmp/upstream_new.md
+            mv /tmp/upstream_new.md UPSTREAM.md
+          fi
+          
+          git config --local user.email "curtismercier@users.noreply.github.com"
+          git config --local user.name "Curtis Mercier"
+          git add UPSTREAM.md 2>/dev/null || true
+          
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: weekly upstream summary $(date -u '+%Y-%m-%d')"
+            git push
+          fi

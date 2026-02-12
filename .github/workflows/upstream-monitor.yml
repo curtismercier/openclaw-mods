@@ -2,147 +2,241 @@ name: Upstream Monitor
 
 on:
   schedule:
-    - cron: '0 */2 * * *'  # Every 2 hours
-  workflow_dispatch:         # Manual trigger
+    - cron: '0 */2 * * *'    # Check every 2 hours
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'Override since timestamp (ISO-8601, e.g. 2026-02-11T00:00:00Z)'
+        required: false
 
 permissions:
+  contents: write
   issues: write
-  contents: read
 
 jobs:
   check-upstream:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          persist-credentials: true
+
+      - name: Determine time window
+        id: window
+        run: |
+          if [ -n "${{ inputs.since }}" ]; then
+            SINCE="${{ inputs.since }}"
+          elif [ -f .github/state/last-check.txt ]; then
+            SINCE=$(cat .github/state/last-check.txt)
+          else
+            SINCE=$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -v-24H '+%Y-%m-%dT%H:%M:%SZ')
+          fi
+          echo "since=$SINCE" >> "$GITHUB_OUTPUT"
+          echo "Checking upstream since: $SINCE"
 
       - name: Fetch upstream commits
         id: commits
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Get last check timestamp (stored in issue body)
-          LAST_CHECK=$(gh api repos/${{ github.repository }}/issues \
-            --jq '[.[] | select(.labels[].name == "upstream-cursor") | .body][0]' \
-            2>/dev/null || echo "")
+          SINCE="${{ steps.window.outputs.since }}"
           
-          if [ -z "$LAST_CHECK" ]; then
-            SINCE=$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -v-24H '+%Y-%m-%dT%H:%M:%SZ')
-          else
-            SINCE="$LAST_CHECK"
-          fi
-          
-          echo "since=$SINCE" >> "$GITHUB_OUTPUT"
-          
-          # Fetch commit SHAs first
+          # Get commit SHAs (up to 100)
           gh api "repos/openclaw/openclaw/commits?since=$SINCE&sha=main&per_page=100" \
-            --jq '.[].sha' > /tmp/commit_shas.txt 2>/dev/null || true
+            --jq '.[].sha' > /tmp/shas.txt 2>/dev/null || true
           
-          COMMIT_COUNT=$(wc -l < /tmp/commit_shas.txt | tr -d ' ')
-          echo "commit_count=$COMMIT_COUNT" >> "$GITHUB_OUTPUT"
+          TOTAL=$(wc -l < /tmp/shas.txt | tr -d ' ')
+          echo "count=$TOTAL" >> "$GITHUB_OUTPUT"
+          echo "Found $TOTAL new commits"
           
-          # Fetch each commit individually for full details (files, message)
-          echo "[]" > /tmp/raw_commits.json
+          # Fetch details for each (cap at 50 to avoid rate limits)
+          head -50 /tmp/shas.txt > /tmp/shas_capped.txt
+          > /tmp/commits.jsonl
+          
           while IFS= read -r sha; do
             [ -z "$sha" ] && continue
             gh api "repos/openclaw/openclaw/commits/$sha" \
               --jq '{
                 sha: .sha[0:8],
+                full_sha: .sha,
                 message: (.commit.message | split("\n")[0]),
+                body: (.commit.message | split("\n")[2:5] | join(" ") | .[0:200]),
                 author: .commit.author.name,
-                date: .commit.author.date,
-                files: [.files[].filename]
-              }' >> /tmp/raw_commits.json 2>/dev/null || true
-          done < /tmp/commit_shas.txt
+                date: .commit.author.date[0:10],
+                files: [.files[].filename],
+                pr: (.commit.message | capture("\\(#(?<num>[0-9]+)\\)") | .num // null)
+              }' >> /tmp/commits.jsonl 2>/dev/null || true
+          done < /tmp/shas_capped.txt
+          
+          if [ "$TOTAL" -gt 50 ]; then
+            echo "⚠️ Capped at 50 commits (total: $TOTAL)" >> /tmp/commits_note.txt
+          fi
 
-      - name: Fetch releases
+      - name: Fetch releases & tags
         id: releases
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          SINCE="${{ steps.commits.outputs.since }}"
+          SINCE="${{ steps.window.outputs.since }}"
           
-          gh api repos/openclaw/openclaw/releases \
-            --jq "[.[] | select(.published_at > \"$SINCE\")] | .[] | {
+          gh api repos/openclaw/openclaw/releases --paginate \
+            --jq ".[] | select(.published_at > \"$SINCE\") | {
               tag: .tag_name,
               name: .name,
-              date: .published_at,
-              body: (.body | split(\"\n\")[0:5] | join(\"\n\"))
-            }" > /tmp/releases.json 2>/dev/null || echo "[]" > /tmp/releases.json
+              date: .published_at[0:10],
+              prerelease: .prerelease,
+              body: (.body | split(\"\n\")[0:10] | join(\"\n\"))
+            }" > /tmp/releases.jsonl 2>/dev/null || true
           
-          RELEASE_COUNT=$(cat /tmp/releases.json | jq -s 'length')
-          echo "release_count=$RELEASE_COUNT" >> "$GITHUB_OUTPUT"
+          RCOUNT=$(wc -l < /tmp/releases.jsonl | tr -d ' ')
+          echo "count=$RCOUNT" >> "$GITHUB_OUTPUT"
 
-      - name: Check our PRs
+      - name: Check our PRs (open + recently closed)
         id: prs
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh api repos/openclaw/openclaw/pulls \
-            -f state=open \
-            --jq '[.[] | select(.user.login == "curtismercier")] | .[] | {
+          # Open PRs
+          gh api 'repos/openclaw/openclaw/pulls?state=open&per_page=100' \
+            --jq '.[] | select(.user.login == "curtismercier") | {
               number: .number,
               title: .title,
-              state: .state,
-              mergeable_state: .mergeable_state,
-              updated_at: .updated_at,
+              state: "open",
+              draft: .draft,
+              mergeable_state: .merge_commit_sha,
+              created_at: .created_at[0:10],
+              updated_at: .updated_at[0:10],
               labels: [.labels[].name],
-              review_comments: .review_comments,
-              draft: .draft
-            }' > /tmp/our_prs.json 2>/dev/null || echo "[]" > /tmp/our_prs.json
+              requested_reviewers: [.requested_reviewers[].login],
+              head_sha: .head.sha[0:8],
+              base: .base.ref,
+              html_url: .html_url
+            }' > /tmp/our_prs.jsonl 2>/dev/null || true
+          
+          # Recently merged/closed
+          gh api 'repos/openclaw/openclaw/pulls?state=closed&sort=updated&direction=desc&per_page=20' \
+            --jq ".[] | select(.user.login == \"curtismercier\" and .closed_at > \"${{ steps.window.outputs.since }}\") | {
+              number: .number,
+              title: .title,
+              state: (if .merged_at then \"merged\" else \"closed\" end),
+              merged_at: .merged_at,
+              closed_at: .closed_at,
+              html_url: .html_url
+            }" >> /tmp/our_prs.jsonl 2>/dev/null || true
+          
+          # Get review comments on open PRs
+          > /tmp/pr_reviews.jsonl
+          while IFS= read -r prnum; do
+            [ -z "$prnum" ] && continue
+            gh api "repos/openclaw/openclaw/pulls/$prnum/reviews" \
+              --jq ".[] | select(.submitted_at > \"${{ steps.window.outputs.since }}\") | {
+                pr: $prnum,
+                user: .user.login,
+                state: .state,
+                body: (.body | .[0:200]),
+                date: .submitted_at[0:10]
+              }" >> /tmp/pr_reviews.jsonl 2>/dev/null || true
+          done < <(jq -r 'select(.state == "open") | .number' /tmp/our_prs.jsonl 2>/dev/null)
+          
+          # Check for merge conflicts
+          > /tmp/pr_conflicts.jsonl
+          while IFS= read -r prnum; do
+            [ -z "$prnum" ] && continue
+            MERGEABLE=$(gh api "repos/openclaw/openclaw/pulls/$prnum" --jq '.mergeable // "unknown"' 2>/dev/null)
+            if [ "$MERGEABLE" = "false" ]; then
+              echo "{\"pr\": $prnum, \"conflict\": true}" >> /tmp/pr_conflicts.jsonl
+            fi
+          done < <(jq -r 'select(.state == "open") | .number' /tmp/our_prs.jsonl 2>/dev/null)
 
-      - name: Build digest
-        id: digest
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build digest & update UPSTREAM.md
+        id: build
         run: |
           bash .github/scripts/build-digest.sh \
-            /tmp/raw_commits.json \
-            /tmp/releases.json \
-            /tmp/our_prs.json \
+            /tmp/commits.jsonl \
+            /tmp/releases.jsonl \
+            /tmp/our_prs.jsonl \
+            /tmp/pr_reviews.jsonl \
+            /tmp/pr_conflicts.jsonl \
             > /tmp/digest.md
           
-          # Check if there's anything worth reporting
-          COMMIT_COUNT="${{ steps.commits.outputs.commit_count }}"
-          RELEASE_COUNT="${{ steps.releases.outputs.release_count }}"
+          COMMIT_COUNT="${{ steps.commits.outputs.count }}"
+          RELEASE_COUNT="${{ steps.releases.outputs.count }}"
           
           if [ "$COMMIT_COUNT" = "0" ] && [ "$RELEASE_COUNT" = "0" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
+            
+            # Prepend to UPSTREAM.md
+            DATE_HEADER="## $(date -u '+%Y-%m-%d %H:%M UTC')"
+            
+            if [ ! -f UPSTREAM.md ]; then
+              echo "# OpenClaw Upstream Log" > UPSTREAM.md
+              echo "" >> UPSTREAM.md
+              echo "_Auto-generated by the [upstream monitor](.github/workflows/upstream-monitor.yml). Updated every 2 hours._" >> UPSTREAM.md
+              echo "" >> UPSTREAM.md
+              echo "---" >> UPSTREAM.md
+              echo "" >> UPSTREAM.md
+            fi
+            
+            # Prepend new entry after the header (line 6)
+            {
+              head -6 UPSTREAM.md
+              echo ""
+              cat /tmp/digest.md
+              echo ""
+              echo "---"
+              echo ""
+              tail -n +7 UPSTREAM.md
+            } > /tmp/upstream_new.md
+            mv /tmp/upstream_new.md UPSTREAM.md
+            
+            # Trim to last 60 days (~720 entries max) to prevent unbounded growth
+            # Keep header (6 lines) + limit body
+            TOTAL_LINES=$(wc -l < UPSTREAM.md)
+            MAX_LINES=3000
+            if [ "$TOTAL_LINES" -gt "$MAX_LINES" ]; then
+              head -"$MAX_LINES" UPSTREAM.md > /tmp/trimmed.md
+              echo "" >> /tmp/trimmed.md
+              echo "_Older entries trimmed. See git history for full log._" >> /tmp/trimmed.md
+              mv /tmp/trimmed.md UPSTREAM.md
+            fi
           fi
 
-      - name: Post digest issue
-        if: steps.digest.outputs.skip != 'true'
+      - name: Post digest issue (if significant)
+        if: steps.build.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TITLE="📡 Upstream Digest — $(date -u '+%Y-%m-%d %H:%M UTC')"
+          COMMIT_COUNT="${{ steps.commits.outputs.count }}"
+          RELEASE_COUNT="${{ steps.releases.outputs.count }}"
           
-          gh issue create \
-            --repo ${{ github.repository }} \
-            --title "$TITLE" \
-            --body-file /tmp/digest.md \
-            --label "upstream-digest"
-
-      - name: Update cursor
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          NOW=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
-          
-          # Find existing cursor issue
-          CURSOR_ISSUE=$(gh api repos/${{ github.repository }}/issues \
-            --jq '[.[] | select(.labels[].name == "upstream-cursor")][0].number' \
-            2>/dev/null || echo "")
-          
-          if [ -n "$CURSOR_ISSUE" ] && [ "$CURSOR_ISSUE" != "null" ]; then
-            gh issue edit "$CURSOR_ISSUE" \
-              --repo ${{ github.repository }} \
-              --body "$NOW"
-          else
+          # Only post issues for releases or 5+ commits (reduce noise)
+          if [ "$RELEASE_COUNT" -gt 0 ] || [ "$COMMIT_COUNT" -ge 5 ]; then
+            TITLE="📡 Upstream Digest — $(date -u '+%Y-%m-%d %H:%M UTC')"
             gh issue create \
               --repo ${{ github.repository }} \
-              --title "🔖 Upstream Monitor Cursor" \
-              --body "$NOW" \
-              --label "upstream-cursor"
+              --title "$TITLE" \
+              --body-file /tmp/digest.md \
+              --label "upstream-digest"
+          fi
+
+      - name: Save cursor & commit UPSTREAM.md
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Save timestamp
+          mkdir -p .github/state
+          date -u '+%Y-%m-%dT%H:%M:%SZ' > .github/state/last-check.txt
+          
+          # Commit if changed
+          git config --local user.email "curtismercier@users.noreply.github.com"
+          git config --local user.name "Curtis Mercier"
+          git add UPSTREAM.md .github/state/last-check.txt 2>/dev/null || true
+          
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: upstream log update $(date -u '+%Y-%m-%d %H:%M')"
+            git push
           fi
