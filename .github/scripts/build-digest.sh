@@ -21,16 +21,16 @@ echo "## 📡 Upstream Digest — $(date -u '+%Y-%m-%d %H:%M UTC')"
 echo ""
 
 # --- Releases ---
-RELEASE_COUNT=$(cat "$RELEASES_FILE" | jq -s 'length' 2>/dev/null || echo "0")
+RELEASE_COUNT=$(cat "$RELEASES_FILE" | jq -s 'flatten | length' 2>/dev/null || echo "0")
 if [ "$RELEASE_COUNT" -gt 0 ]; then
   echo "### 🚀 New Releases"
   echo ""
-  cat "$RELEASES_FILE" | jq -rs '.[] | "- **\(.tag)** — \(.name) (\(.date[0:10]))\n  \(.body | split("\n")[0])"'
+  cat "$RELEASES_FILE" | jq -rs 'flatten | .[] | "- **\(.tag)** — \(.name) (\(.date[0:10]))\n  \(.body | split("\n")[0])"'
   echo ""
 fi
 
 # --- Commits ---
-COMMIT_COUNT=$(cat "$COMMITS_FILE" | jq -s 'length' 2>/dev/null || echo "0")
+COMMIT_COUNT=$(cat "$COMMITS_FILE" | jq -s 'flatten | length' 2>/dev/null || echo "0")
 if [ "$COMMIT_COUNT" -gt 0 ]; then
   echo "### 📝 Commits to main ($COMMIT_COUNT new)"
   echo ""
@@ -38,7 +38,7 @@ if [ "$COMMIT_COUNT" -gt 0 ]; then
   # Categorize commits
   HAS_ALERT=false
   
-  cat "$COMMITS_FILE" | jq -rs '.[] | "\(.sha) \(.message)"' | while IFS= read -r line; do
+  cat "$COMMITS_FILE" | jq -rs 'flatten | .[] | "\(.sha) \(.message)"' | while IFS= read -r line; do
     SHA=$(echo "$line" | cut -d' ' -f1)
     MSG=$(echo "$line" | cut -d' ' -f2-)
     
@@ -62,7 +62,7 @@ if [ "$COMMIT_COUNT" -gt 0 ]; then
   # Summary of file areas touched
   echo "<details><summary>Files touched</summary>"
   echo ""
-  cat "$COMMITS_FILE" | jq -rs '[.[].files[]?] | group_by(split("/")[0]) | .[] | "- **\(.[0] | split("/")[0])/** (\(length) files)"' 2>/dev/null || echo "- *(file details not available)*"
+  cat "$COMMITS_FILE" | jq -rs '[flatten | .[].files[]?] | group_by(split("/")[0]) | .[] | "- **\(.[0] | split("/")[0])/** (\(length) files)"' 2>/dev/null || echo "- *(file details not available)*"
   echo ""
   echo "</details>"
   echo ""
@@ -74,11 +74,11 @@ if [ "$COMMIT_COUNT" = "0" ] && [ "$RELEASE_COUNT" = "0" ]; then
 fi
 
 # --- Our PRs ---
-PR_COUNT=$(cat "$PRS_FILE" | jq -s 'length' 2>/dev/null || echo "0")
+PR_COUNT=$(cat "$PRS_FILE" | jq -s 'flatten | length' 2>/dev/null || echo "0")
 if [ "$PR_COUNT" -gt 0 ]; then
   echo "### 🔀 Our Open PRs"
   echo ""
-  cat "$PRS_FILE" | jq -rs '.[] | "- **#\(.number)** \(.title) — \(if .draft then "📝 Draft" else "🟢 Open" end) | reviews: \(.review_comments) | updated: \(.updated_at[0:10])"'
+  cat "$PRS_FILE" | jq -rs 'flatten | .[] | "- **#\(.number)** \(.title) — \(if .draft then "📝 Draft" else "🟢 Open" end) | reviews: \(.review_comments) | updated: \(.updated_at[0:10])"'
   echo ""
 fi
 
