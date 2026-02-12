@@ -9,6 +9,7 @@ Patches and modifications that extend OpenClaw beyond its current release. Each 
 | Mod | Description | Status |
 |-----|-------------|--------|
 | [per-agent-compaction](patches/per-agent-compaction/) | Per-agent compaction overrides — give different agents different context management strategies | ✅ Tested on v2026.2.9 |
+| [upstream-monitor](.github/workflows/upstream-monitor.yml) | GitHub Actions workflow that tracks upstream OpenClaw commits, releases, and your open PRs | ✅ Active |
 
 ## Why this exists
 
@@ -93,6 +94,25 @@ Per-agent fields override defaults. The `memoryFlush` sub-object is shallow-merg
 **Upstream:** PR pending against [openclaw/openclaw](https://github.com/openclaw/openclaw). Closes [#13736](https://github.com/openclaw/openclaw/issues/13736) and [#14446](https://github.com/openclaw/openclaw/issues/14446).
 
 **Tested on:** OpenClaw v2026.2.9
+
+## Upstream Monitor
+
+A GitHub Actions workflow that watches `openclaw/openclaw` and posts digest issues to this repo every 2 hours.
+
+**What it tracks:**
+- New commits to `main` — flagged with ⚠️ when they touch agent-scope, schema, compaction, memory, or plugin-sdk
+- New releases / tags
+- Status of your open PRs (reviews, CI, merge state)
+
+**How it works:**
+- Runs on a cron schedule (every 2 hours) or manual dispatch
+- Stores a cursor timestamp in a pinned issue (label: `upstream-cursor`)
+- Posts digest issues (label: `upstream-digest`) only when there are changes
+- No external webhooks or secrets needed — uses the default `GITHUB_TOKEN`
+
+**Setup:** Fork this repo and enable Actions. That's it. The workflow will start posting digest issues automatically.
+
+To customize what gets flagged, edit the `WATCH_PATTERNS` array in `.github/scripts/build-digest.sh`.
 
 ## Contributing
 
