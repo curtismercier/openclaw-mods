@@ -26,7 +26,6 @@ jobs:
             2>/dev/null || echo "")
           
           if [ -z "$LAST_CHECK" ]; then
-            # First run — look back 24 hours
             SINCE=$(date -u -d '24 hours ago' '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date -u -v-24H '+%Y-%m-%dT%H:%M:%SZ')
           else
             SINCE="$LAST_CHECK"
@@ -34,22 +33,26 @@ jobs:
           
           echo "since=$SINCE" >> "$GITHUB_OUTPUT"
           
-          # Fetch commits from upstream
-          gh api repos/openclaw/openclaw/commits \
-            --paginate \
-            -f since="$SINCE" \
-            -f sha=main \
-            --jq '.[] | {
-              sha: .sha[0:8],
-              message: (.commit.message | split("\n")[0]),
-              author: .commit.author.name,
-              date: .commit.author.date,
-              files: [.files[]?.filename] 
-            }' > /tmp/raw_commits.json 2>/dev/null || true
+          # Fetch commit SHAs first
+          gh api "repos/openclaw/openclaw/commits?since=$SINCE&sha=main&per_page=100" \
+            --jq '.[].sha' > /tmp/commit_shas.txt 2>/dev/null || true
           
-          # If no files in commit list, fetch individually for file details
-          COMMIT_COUNT=$(cat /tmp/raw_commits.json | jq -s 'length')
+          COMMIT_COUNT=$(wc -l < /tmp/commit_shas.txt | tr -d ' ')
           echo "commit_count=$COMMIT_COUNT" >> "$GITHUB_OUTPUT"
+          
+          # Fetch each commit individually for full details (files, message)
+          echo "[]" > /tmp/raw_commits.json
+          while IFS= read -r sha; do
+            [ -z "$sha" ] && continue
+            gh api "repos/openclaw/openclaw/commits/$sha" \
+              --jq '{
+                sha: .sha[0:8],
+                message: (.commit.message | split("\n")[0]),
+                author: .commit.author.name,
+                date: .commit.author.date,
+                files: [.files[].filename]
+              }' >> /tmp/raw_commits.json 2>/dev/null || true
+          done < /tmp/commit_shas.txt
 
       - name: Fetch releases
         id: releases
