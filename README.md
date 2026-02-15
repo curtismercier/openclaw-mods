@@ -8,8 +8,9 @@ Patches and modifications that extend OpenClaw beyond its current release. Each 
 
 | Mod | Description | Status |
 |-----|-------------|--------|
-| [per-agent-compaction](patches/per-agent-compaction/) | Per-agent compaction overrides — give different agents different context management strategies | ✅ Tested on v2026.2.9 |
-| [upstream-monitor](.github/workflows/upstream-monitor.yml) | GitHub Actions workflow that tracks upstream OpenClaw commits, releases, and your open PRs | ✅ Active |
+| [per-agent-compaction](patches/per-agent-compaction/) | Per-agent compaction overrides — give different agents different context management strategies | Tested on v2026.2.9 |
+| [tui-theme](patches/tui-theme/) | Runtime TUI color theming — swap the hardcoded palette without rebuilding | Tested on v2026.2.13+ |
+| [upstream-monitor](.github/workflows/upstream-monitor.yml) | GitHub Actions workflow that tracks upstream OpenClaw commits, releases, and your open PRs | Active |
 
 ## Why this exists
 
@@ -94,6 +95,22 @@ Per-agent fields override defaults. The `memoryFlush` sub-object is shallow-merg
 **Upstream:** PR pending against [openclaw/openclaw](https://github.com/openclaw/openclaw). Closes [#13736](https://github.com/openclaw/openclaw/issues/13736) and [#14446](https://github.com/openclaw/openclaw/issues/14446).
 
 **Tested on:** OpenClaw v2026.2.9
+
+### tui-theme
+
+**Problem:** The TUI has a hardcoded color palette with no runtime override — no env vars, config file, CLI flags, or `/settings` option. Changing colors requires editing TypeScript and rebuilding.
+
+**Solution:** Direct hex replacement in compiled `dist/tui-*.js` bundles. Ships with a **neon-vice** theme (GTA fluorescent nights — deep dark base, hot pink accents, electric cyan, neon green) and is extensible for additional themes.
+
+```bash
+./patches/tui-theme/apply.sh --apply neon-vice   # Apply
+./patches/tui-theme/apply.sh --revert            # Revert
+./patches/tui-theme/apply.sh --status            # Check state
+```
+
+Pairs with the [Gravicity tmux IDE](https://github.com/curtismercier/gravicity-tmux) `tmux-theme` switcher for unified theming across tmux, Ghostty, and OpenClaw TUI.
+
+**Tested on:** OpenClaw v2026.2.13+
 
 ## Upstream Monitor
 
