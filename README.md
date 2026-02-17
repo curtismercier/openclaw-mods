@@ -8,8 +8,8 @@ Patches and modifications that extend OpenClaw beyond its current release. Each 
 
 | Mod | Description | Status |
 |-----|-------------|--------|
-| [per-agent-compaction](patches/per-agent-compaction/) | Per-agent compaction overrides — give different agents different context management strategies | Tested on v2026.2.9 |
-| [tui-theme](patches/tui-theme/) | Runtime TUI color theming — swap the hardcoded palette without rebuilding | Tested on v2026.2.13+ |
+| [tui-theme](patches/tui-theme/) | Runtime TUI color theming — swap the hardcoded palette without rebuilding | ✅ Tested on v2026.2.16 |
+| ~~[per-agent-compaction](patches/per-agent-compaction/)~~ | Per-agent compaction overrides | 🔀 Superseded by [PR #19329](https://github.com/openclaw/openclaw/pull/19329) |
 | [upstream-monitor](.github/workflows/upstream-monitor.yml) | GitHub Actions workflow that tracks upstream OpenClaw commits, releases, and your open PRs | Active |
 
 ## Why this exists
@@ -29,20 +29,20 @@ git clone https://github.com/curtismercier/openclaw-mods.git
 cd openclaw-mods
 
 # Apply a patch
-./patches/per-agent-compaction/apply.sh --apply
+./patches/tui-theme/apply.sh --apply neon-vice
 
 # Check status after an OpenClaw update
-./patches/per-agent-compaction/apply.sh --status
+./patches/tui-theme/apply.sh --status
 
 # Revert before updating OpenClaw
-./patches/per-agent-compaction/apply.sh --revert
+./patches/tui-theme/apply.sh --revert
 ```
 
 ## How patches work
 
 Each patch script:
 
-1. **Pre-flight checks** — Verifies the expected code exists in the target files. If OpenClaw was updated and the code changed, the patch refuses to apply and tells you why.
+1. **Pre-flight checks** — Verifies the expected hex values exist in the target files. If OpenClaw was updated and the palette changed, the patch refuses to apply and tells you why.
 2. **Backs up** originals to `.backups/` before touching anything.
 3. **Records the version** it was applied against in `.patched-version`, so you can detect stale patches after updates.
 4. **Reverts cleanly** from backups with `--revert`.
@@ -51,66 +51,51 @@ Each patch script:
 
 ```bash
 # Before updating OpenClaw
-./patches/per-agent-compaction/apply.sh --revert
+./patches/tui-theme/apply.sh --revert
 
 # Update OpenClaw
 npm install -g openclaw@latest
 
 # Re-apply (will fail loudly if the patch needs updating)
-./patches/per-agent-compaction/apply.sh --apply
+./patches/tui-theme/apply.sh --apply neon-vice
 ```
 
 ## Patches
 
-### per-agent-compaction
-
-**Problem:** OpenClaw's compaction settings (`mode`, `reserveTokensFloor`, `maxHistoryShare`, `memoryFlush`) only apply globally via `agents.defaults.compaction`. In multi-agent systems, different agents need different context management — a research agent benefits from high retention, while a quick task agent should compact early.
-
-**Solution:** Adds optional `compaction` config to individual agent entries in `agents.list[]`:
-
-```yaml
-agents:
-  defaults:
-    compaction:
-      mode: default
-      reserveTokensFloor: 20000
-      memoryFlush:
-        enabled: true
-  list:
-    - id: researcher
-      compaction:
-        reserveTokensFloor: 40000
-        maxHistoryShare: 0.8
-    - id: executor
-      compaction:
-        maxHistoryShare: 0.4
-        memoryFlush:
-          enabled: false
-    - id: chat
-      # Inherits defaults — no change needed
-```
-
-Per-agent fields override defaults. The `memoryFlush` sub-object is shallow-merged, so partial overrides (e.g., just `enabled: false`) don't wipe the default `prompt` or `systemPrompt`.
-
-**Upstream:** PR pending against [openclaw/openclaw](https://github.com/openclaw/openclaw). Closes [#13736](https://github.com/openclaw/openclaw/issues/13736) and [#14446](https://github.com/openclaw/openclaw/issues/14446).
-
-**Tested on:** OpenClaw v2026.2.9
-
 ### tui-theme
 
-**Problem:** The TUI has a hardcoded color palette with no runtime override — no env vars, config file, CLI flags, or `/settings` option. Changing colors requires editing TypeScript and rebuilding.
+**Problem:** The TUI has a hardcoded color palette in `src/tui/theme/theme.ts` with no runtime override — no env vars, config file, CLI flags, or `/settings` option. Changing colors requires editing TypeScript and rebuilding.
 
-**Solution:** Direct hex replacement in compiled `dist/tui-*.js` bundles. Ships with a **neon-vice** theme (GTA fluorescent nights — deep dark base, hot pink accents, electric cyan, neon green) and is extensible for additional themes.
+**Solution:** Direct hex replacement in compiled `dist/tui-*.js` bundles. The palette exists as plain string literals, so a targeted `sed` swap is safe and reliable.
+
+Ships with a **neon-vice** theme — GTA fluorescent nights with a deep dark base, hot pink accents, electric cyan, and vivid yellow code blocks.
+
+| Element | Stock | Neon Vice |
+|---------|-------|-----------|
+| Accent | `#F6C453` gold | `#ff2d95` hot pink |
+| Links | `#7DD3A5` green | `#04d9ff` electric cyan |
+| Code | `#F0C987` warm gold | `#ffe66d` vivid yellow |
+| User msg bg | `#2B2F36` grey-blue | `#1e1e2e` deep purple-dark |
+| Code block bg | `#1E232A` | `#11111b` near-black |
+| Tool success bg | `#1E2D23` green-dark | `#11161e` cool steel |
+| Error | `#F97066` coral | `#ff3860` vivid red |
 
 ```bash
 ./patches/tui-theme/apply.sh --apply neon-vice   # Apply
 ./patches/tui-theme/apply.sh --revert            # Revert
 ./patches/tui-theme/apply.sh --status            # Check state
+./patches/tui-theme/apply.sh --list              # List themes
 ```
 
 Pairs with the [Gravicity tmux IDE](https://github.com/curtismercier/gravicity-tmux) `tmux-theme` switcher for unified theming across tmux, Ghostty, and OpenClaw TUI.
 
-**Tested on:** OpenClaw v2026.2.13+
+**Adding themes:** Define a new color array in `apply.sh` matching `ORIGINAL_COLORS` by index (19 colors), then add a case to the `--apply` handler.
+
+**Tested on:** OpenClaw v2026.2.13 through v2026.2.16
+
+### per-agent-compaction (archived)
+
+> **This patch has been superseded by [PR #19329](https://github.com/openclaw/openclaw/pull/19329)** — a clean upstream implementation with per-agent `compaction` and `contextPruning` overrides, `mode: "off"` support, deep-merge resolvers, and a 38-test suite. The original patch script here was a proof-of-concept that validated the approach. Once the PR is merged, no patch is needed.
 
 ## Upstream Monitor
 
@@ -121,15 +106,7 @@ A GitHub Actions workflow that watches `openclaw/openclaw` and posts digest issu
 - New releases / tags
 - Status of your open PRs (reviews, CI, merge state)
 
-**How it works:**
-- Runs on a cron schedule (every 2 hours) or manual dispatch
-- Stores a cursor timestamp in a pinned issue (label: `upstream-cursor`)
-- Posts digest issues (label: `upstream-digest`) only when there are changes
-- No external webhooks or secrets needed — uses the default `GITHUB_TOKEN`
-
-**Setup:** Fork this repo and enable Actions. That's it. The workflow will start posting digest issues automatically.
-
-To customize what gets flagged, edit the `WATCH_PATTERNS` array in `.github/scripts/build-digest.sh`.
+**Setup:** Fork this repo and enable Actions. The workflow starts posting digest issues automatically. No external webhooks or secrets needed — uses the default `GITHUB_TOKEN`.
 
 ## Contributing
 

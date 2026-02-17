@@ -18,19 +18,20 @@ GTA fluorescent nights — deep dark base with vivid neon accents.
 
 | Element | Stock | Neon Vice |
 |---------|-------|-----------|
-| Background (user msg) | `#2B2F36` grey-blue | `#1e1e2e` deep purple-dark |
-| Background (tool pending) | `#1F2A2F` teal-dark | `#1a1528` purple-dark |
-| Background (tool success) | `#1E2D23` green-dark | `#0f2a15` deeper green |
-| Background (tool error) | `#2F1F1F` red-dark | `#2a0f1a` pink-dark |
-| Background (code block) | `#1E232A` | `#11111b` near-black |
+| Text | `#E8E3D5` warm white | `#cdd6f4` cool white |
+| Dim | `#7B7F87` grey | `#6c7086` muted |
 | Accent | `#F6C453` gold | `#ff2d95` hot pink |
 | Accent soft | `#F2A65A` orange | `#c77dff` neon purple |
 | Links | `#7DD3A5` green | `#04d9ff` electric cyan |
 | Code | `#F0C987` warm gold | `#ffe66d` vivid yellow |
-| Success | `#7DD3A5` green | `#04d9ff` cyan |
+| User msg bg | `#2B2F36` grey-blue | `#1e1e2e` deep purple-dark |
+| Tool pending bg | `#1F2A2F` teal-dark | `#1a1528` purple-dark |
+| Tool success bg | `#1E2D23` green-dark | `#11161e` cool steel |
+| Tool error bg | `#2F1F1F` red-dark | `#2a0f1a` pink-dark |
+| Code block bg | `#1E232A` | `#11111b` near-black |
 | Error | `#F97066` coral | `#ff3860` vivid red |
 
-Designed to pair with the **neon-vice** tmux/Ghostty theme from the [tmux IDE config](https://github.com/curtismercier/gravicity-tmux).
+Designed to pair with the **neon-vice** tmux/Ghostty theme from the [Gravicity tmux IDE](https://github.com/curtismercier/gravicity-tmux).
 
 ## Usage
 
@@ -50,12 +51,6 @@ Designed to pair with the **neon-vice** tmux/Ghostty theme from the [tmux IDE co
 
 Restart the OpenClaw TUI after applying for changes to take effect.
 
-## Integration with tmux-theme
-
-If using the Gravicity tmux IDE, the `tmux-theme` switcher can automatically apply/revert this patch alongside tmux and Ghostty theme changes. See the [tmux IDE docs](https://github.com/curtismercier/gravicity-tmux) for setup.
-
-Local integration path: `~/.tmux/themes/openclaw-theme-patch.sh`
-
 ## After OpenClaw updates
 
 ```bash
@@ -68,14 +63,26 @@ Local integration path: `~/.tmux/themes/openclaw-theme-patch.sh`
 ./apply.sh --apply neon-vice
 ```
 
-The script backs up original files on first apply. If OpenClaw updates change the TUI bundle filenames (they include content hashes), the old backups become stale — just delete `.backups/` and re-apply.
+The script backs up original files on first apply. If OpenClaw updates change the TUI bundle filenames (they include content hashes), the old backups become stale — delete `.backups/` and re-apply.
 
 ## Adding themes
 
-Define a new color array in `apply.sh` matching `ORIGINAL_COLORS` by index (19 colors), then add a case to the `--apply` handler. PRs welcome.
+Define a new color array in `apply.sh` matching `ORIGINAL_COLORS` by index (19 colors), then add a case to the `--apply` handler.
+
+## Compatibility
+
+| OpenClaw Version | Status |
+|-----------------|--------|
+| v2026.2.13 | ✅ Tested |
+| v2026.2.14–2.15 | ✅ Compatible (same palette) |
+| v2026.2.16 | ✅ Tested |
+
+## Changelog
+
+- **v2** (2026-02-17): Verified against v2026.2.16, updated docs with compatibility matrix
+- **v1.1** (2026-02-15): Changed `toolSuccessBg` from `#0f2a15` (deep green) to `#11161e` (cool steel) — better contrast
+- **v1** (2026-02-15): Initial release with neon-vice theme, 19-color palette swap
 
 ## Upstream
 
-Ideally OpenClaw would support runtime theme configuration. Until then, this patch bridges the gap.
-
-Relevant for: [openclaw/openclaw](https://github.com/openclaw/openclaw) — potential feature request for `theme` config in `openclaw.json` or a `--theme` CLI flag.
+Ideally OpenClaw would support runtime theme configuration. Until then, this patch bridges the gap. Potential feature request: `theme` config in `openclaw.json` or a `--theme` CLI flag.
